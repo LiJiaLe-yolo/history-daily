@@ -3,7 +3,6 @@ package com.wang.springboottemplate;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
-import com.alibaba.fastjson2.writer.JSONWriter;
 import okhttp3.*;
 
 import java.io.IOException;
@@ -118,8 +117,8 @@ public class HistoryArticleMain {
                 JSONObject gistBody = new JSONObject();
                 JSONObject filesNode = new JSONObject();
                 JSONObject fileItem = new JSONObject();
-                // fastjson2 格式化输出
-                fileItem.put("content", JSON.toJSONString(list, JSONWriter.Feature.PrettyFormat));
+                // 直接普通json，去掉格式化
+                fileItem.put("content", JSON.toJSONString(list));
                 filesNode.put(GIST_FILENAME, fileItem);
                 gistBody.put("files", filesNode);
 
