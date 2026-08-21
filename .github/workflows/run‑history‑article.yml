@@ -1,7 +1,6 @@
 name: 每日历史稿件生成任务
 on:
   schedule:
-    # UTC时间21点 = 北京时间次日05点
     - cron: '0 21 * * *'
   workflow_dispatch:
 
@@ -26,11 +25,11 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           GIST_ID: ${{ secrets.GIST_ID }}
-          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
-        run: java -jar target/history-article-generator-1.0-SNAPSHOT-jar-with-dependencies.jar
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: java -jar target/history‑article‑generator‑1.0‑SNAPSHOT‑jar‑with‑dependencies.jar
 
       - name: 上传产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload‑artifact@v4
         with:
-          name: history-article-output
+          name: history‑article‑output
           path: output/
