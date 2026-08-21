@@ -16,7 +16,7 @@ public class HistoryArticleMain {
     private static final String DEEPSEEK_API_KEY = System.getenv("DEEPSEEK_API_KEY");
     private static final String FEISHU_WEBHOOK = System.getenv("FEISHU_WEBHOOK");
     private static final String GIST_ID = System.getenv("GIST_ID");
-    private static final String GITHUB_PAT = System.getenv("GITHUB_PAT");
+    private static final String GH_PAT = System.getenv("GH_PAT");
 
     private static final String DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
     private static final int MAX_OUTPUT_TOKENS = 2200;
@@ -41,7 +41,7 @@ public class HistoryArticleMain {
             System.out.println("=====历史稿件生成任务启动=====");
 
             JSONArray usedTopics = safeReadGistTopicList();
-            System.out.printf("历史选题加载：%d 条%n", usedTopics.size());
+            System.out.printf("历史选题加载，共%d条%n", usedTopics.size());
 
             String selectTopic = generateTopic(usedTopics);
             System.out.println("生成选题：" + selectTopic);
@@ -74,20 +74,23 @@ public class HistoryArticleMain {
         if (isBlank(DEEPSEEK_API_KEY)) throw new RuntimeException("缺少环境变量 DEEPSEEK_API_KEY");
         if (isBlank(FEISHU_WEBHOOK)) throw new RuntimeException("缺少环境变量 FEISHU_WEBHOOK");
         if (isBlank(GIST_ID)) throw new RuntimeException("缺少环境变量 GIST_ID");
-        if (isBlank(GITHUB_PAT)) throw new RuntimeException("缺少环境变量 GITHUB_PAT");
+        if (isBlank(GH_PAT)) throw new RuntimeException("缺少环境变量 GH_PAT");
     }
 
     private static void initLocalDir() throws IOException {
         Files.createDirectories(Paths.get(OUTPUT_DIR));
     }
 
+    /**
+     * 从Gist读取历史选题列表
+     */
     private static JSONArray safeReadGistTopicList() {
         int maxRetry = 2;
         for (int r = 0; r < maxRetry; r++) {
             try {
                 Request req = new Request.Builder()
                         .url("https://api.github.com/gists/" + GIST_ID)
-                        .header("Authorization", "token " + GITHUB_PAT)
+                        .header("Authorization", "token " + GH_PAT)
                         .get()
                         .build();
                 try (Response resp = HTTP_CLIENT.newCall(req).execute()) {
@@ -101,46 +104,50 @@ public class HistoryArticleMain {
                     return isBlank(content) ? new JSONArray() : JSONArray.parseArray(content);
                 }
             } catch (Exception ex) {
-                System.err.printf("Gist读取重试 %d 异常:%s%n", r + 1, ex.getMessage());
-                sleepMs(1200);
+                System.err.printf("Gist读取重试 %d, err:%s%n", r + 1, ex.getMessage());
+                sleepMs(1000);
             }
         }
         return new JSONArray();
     }
 
+    /**
+     * 将新选题追加写入Gist
+     */
     private static void appendTopicToGist(JSONArray list, String newTopic) {
         list.add(newTopic);
-        while (list.size() > MAX_HISTORY_TOPIC_SIZE) list.remove(0);
+        while (list.size() > MAX_HISTORY_TOPIC_SIZE) {
+            list.remove(0);
+        }
+        JSONObject body = new JSONObject();
+        JSONObject filesWrap = new JSONObject();
+        JSONObject fileItem = new JSONObject();
+        fileItem.put("content", JSON.toJSONString(list));
+        filesWrap.put(GIST_FILENAME, fileItem);
+        body.put("files", filesWrap);
+
         int maxRetry = 2;
         for (int r = 0; r < maxRetry; r++) {
             try {
-                JSONObject gistBody = new JSONObject();
-                JSONObject filesNode = new JSONObject();
-                JSONObject fileItem = new JSONObject();
-                // 直接普通json，去掉格式化
-                fileItem.put("content", JSON.toJSONString(list));
-                filesNode.put(GIST_FILENAME, fileItem);
-                gistBody.put("files", filesNode);
-
-                RequestBody body = RequestBody.create(gistBody.toString(), MediaType.parse("application/json;charset=utf-8"));
+                RequestBody reqBody = RequestBody.create(body.toString(), MediaType.parse("application/json;charset=utf-8"));
                 Request req = new Request.Builder()
                         .url("https://api.github.com/gists/" + GIST_ID)
-                        .header("Authorization", "token " + GITHUB_PAT)
-                        .method("PATCH", body)
+                        .header("Authorization", "token " + GH_PAT)
+                        .method("PATCH", reqBody)
                         .build();
                 try (Response resp = HTTP_CLIENT.newCall(req).execute()) {
                     if (resp.isSuccessful()) {
-                        System.out.println("✅Gist更新成功，历史数量：" + list.size());
+                        System.out.println("✅Gist更新成功，已保存选题");
                         return;
                     }
                     System.err.println("Gist写入失败 code:" + resp.code());
                 }
             } catch (Exception ex) {
-                System.err.printf("Gist写入重试 %d 异常:%s%n", r + 1, ex.getMessage());
-                sleepMs(1200);
+                System.err.printf("Gist写入重试 %d err:%s%n", r + 1, ex.getMessage());
+                sleepMs(1000);
             }
         }
-        System.err.println("⚠️Gist持久化失败，选题未保存");
+        System.err.println("⚠️Gist写入全部重试失败");
     }
 
     private static String cleanJsonRaw(String raw) {
@@ -172,8 +179,8 @@ public class HistoryArticleMain {
                 语言口语化适合手机阅读，段落简短。引用正史，拒绝阴谋论。
                 返回严格JSON格式：{"title":"","content":"换行用\\n","tags":["#历史","#古代史","#历史解读","#人物"]}
                 """;
-        String userPrompt = "选题：" + selectTopic + "，正文控制1400-1800字符，结尾必须带互动提问。";
-        JSONObject respJson = callDeepSeekApi(sysPromptArticle, userPrompt);
+        String userPrompt = "选题：" + selectTopic + "，正文控制1400‑1800字符，结尾必须带互动提问。";
+        JSONObject respJson = callDeepSeekApi(sysPromptTopic, userPrompt);
         String rawResp = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
         return JSONObject.parseObject(rawResp);
     }
@@ -184,14 +191,14 @@ public class HistoryArticleMain {
         for (int i = 0; i < retryTimes; i++) {
             try {
                 JSONObject reqBody = new JSONObject();
-                reqBody.put("model", "deepseek-v4-flash");
+                reqBody.put("model", "deepseek‑v4‑flash");
                 reqBody.put("max_tokens", MAX_OUTPUT_TOKENS);
                 JSONArray messages = new JSONArray();
                 messages.add(JSONObject.of("role", "system", "content", systemContent));
                 messages.add(JSONObject.of("role", "user", "content", userContent));
                 reqBody.put("messages", messages);
 
-                RequestBody body = RequestBody.create(reqBody.toString(), MediaType.parse("application/json; charset=utf-8"));
+                RequestBody body = RequestBody.create(reqBody.toString(), MediaType.parse("application/json; charset=utf‑8"));
                 Request request = new Request.Builder()
                         .url(DEEPSEEK_URL)
                         .header("Authorization", "Bearer " + DEEPSEEK_API_KEY)
@@ -239,7 +246,7 @@ public class HistoryArticleMain {
         cardBody.put("elements", elements);
         card.put("card", cardBody);
 
-        RequestBody body = RequestBody.create(card.toString(), MediaType.parse("application/json;charset=utf-8"));
+        RequestBody body = RequestBody.create(card.toString(), MediaType.parse("application/json;charset=utf‑8"));
         Request req = new Request.Builder().url(FEISHU_WEBHOOK).post(body).build();
         try (Response resp = HTTP_CLIENT.newCall(req).execute()) {
             if (!resp.isSuccessful()) System.err.println("飞书调用异常 code:" + resp.code());
