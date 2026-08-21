@@ -1,7 +1,9 @@
 package com.wang.springboottemplate;
 
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.writer.JSONWriter;
 import okhttp3.*;
 
 import java.io.IOException;
@@ -116,7 +118,8 @@ public class HistoryArticleMain {
                 JSONObject gistBody = new JSONObject();
                 JSONObject filesNode = new JSONObject();
                 JSONObject fileItem = new JSONObject();
-                fileItem.put("content", JSONObject.toJSONString(list, true));
+                // fastjson2 格式化输出
+                fileItem.put("content", JSON.toJSONString(list, JSONWriter.Feature.PrettyFormat));
                 filesNode.put(GIST_FILENAME, fileItem);
                 gistBody.put("files", filesNode);
 
@@ -156,7 +159,7 @@ public class HistoryArticleMain {
                     2.拒绝流水账、时间线类；
                     3.只输出json{"topic":"xxx"}，不要任何其他文字。
                     """;
-        String userPrompt = "生成1条全新历史思辨选题，避开以下已使用选题：\n" + historyTopics.toJSONString();
+        String userPrompt = "生成1条全新历史思辨选题，避开以下已使用选题：\n" + JSON.toJSONString(historyTopics);
         JSONObject respJson = callDeepSeekApi(sysPromptTopic, userPrompt);
         String raw = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
         JSONObject obj = JSONObject.parseObject(raw);
@@ -215,7 +218,7 @@ public class HistoryArticleMain {
         StringBuilder sb = new StringBuilder();
         sb.append("# ").append(title).append("\n\n");
         sb.append(content).append("\n\n");
-        sb.append(tags.toJSONString());
+        sb.append(JSON.toJSONString(tags));
         Files.write(Paths.get(OUTPUT_DIR, "article.md"), sb.toString().getBytes(StandardCharsets.UTF_8));
         System.out.println("✅md文件已保存 output/article.md");
     }
