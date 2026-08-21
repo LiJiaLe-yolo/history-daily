@@ -1,0 +1,20 @@
+name: 仓库保活｜防止定时任务休眠
+on:
+  schedule:
+    # UTC12点 = 北京时间20点，每15天空提交一次
+    - cron: '0 12 */15 * *'
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 空提交保活
+        run: |
+          git config --global user.name "GitHub-Actions-Robot"
+          git config --global user.email "robot@example.com"
+          git commit --allow-empty -m "chore: repo keep alive"
+          git push
