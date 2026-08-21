@@ -26,10 +26,10 @@ jobs:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           GIST_ID: ${{ secrets.GIST_ID }}
           GH_PAT: ${{ secrets.GH_PAT }}
-        run: java -jar target/history‑article‑generator‑1.0‑SNAPSHOT‑jar‑with‑dependencies.jar
+        run: java -jar target/history-article-generator-1.0-SNAPSHOT-jar-with-dependencies.jar
 
       - name: 上传产物
-        uses: actions/upload‑artifact@v4
+        uses: actions/upload-artifact@v4
         with:
-          name: history‑article‑output
+          name: history-article-output
           path: output/
