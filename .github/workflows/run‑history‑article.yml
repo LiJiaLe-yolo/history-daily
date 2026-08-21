@@ -1,0 +1,37 @@
+name:每日历史稿件生成
+on:
+  schedule:
+    # UTC21点 = 北京时间次日05:00；github cron有0‑15min漂移
+    - cron: '0 21 * * *'
+  workflow_dispatch: # 网页手动触发调试
+
+jobs:
+  run‑task:
+    runs‑on: ubuntu‑latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置JDK17
+        uses: actions/setup‑java@v4
+        with:
+          java‑version: '17'
+          distribution: 'temurin'
+
+      - name: Maven编译打包
+        run: mvn clean package -DskipTests
+
+      - name: 运行Java生成任务
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+        run: java -jar target/history‑article‑generator‑1.0‑SNAPSHOT‑jar‑with‑dependencies.jar
+
+      - name: 上传产物md文件，完整文章下载
+        uses: actions/upload‑artifact@v4
+        with:
+          name: article‑output
+          path: output/
+          retention‑days: 7
