@@ -1,7 +1,7 @@
 name: 每日历史稿件生成任务
 on:
   schedule:
-    # UTC21点 = 北京时间次日05:00；github cron有0-15min漂移
+    # UTC时间21点 = 北京时间次日05点
     - cron: '0 21 * * *'
   workflow_dispatch:
 
@@ -21,7 +21,7 @@ jobs:
       - name: Maven编译打包
         run: mvn clean package -DskipTests
 
-      - name: 运行Java生成程序
+      - name: 运行Java程序
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
@@ -29,9 +29,8 @@ jobs:
           GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
         run: java -jar target/history-article-generator-1.0-SNAPSHOT-jar-with-dependencies.jar
 
-      - name: 上传产出文章产物
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: history-article-output
           path: output/
-          retention-days: 7
