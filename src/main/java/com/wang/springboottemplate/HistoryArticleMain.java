@@ -81,9 +81,6 @@ public class HistoryArticleMain {
         Files.createDirectories(Paths.get(OUTPUT_DIR));
     }
 
-    /**
-     * 从Gist读取历史选题列表
-     */
     private static JSONArray safeReadGistTopicList() {
         int maxRetry = 2;
         for (int r = 0; r < maxRetry; r++) {
@@ -111,9 +108,6 @@ public class HistoryArticleMain {
         return new JSONArray();
     }
 
-    /**
-     * 将新选题追加写入Gist
-     */
     private static void appendTopicToGist(JSONArray list, String newTopic) {
         list.add(newTopic);
         while (list.size() > MAX_HISTORY_TOPIC_SIZE) {
@@ -179,8 +173,8 @@ public class HistoryArticleMain {
                 语言口语化适合手机阅读，段落简短。引用正史，拒绝阴谋论。
                 返回严格JSON格式：{"title":"","content":"换行用\\n","tags":["#历史","#古代史","#历史解读","#人物"]}
                 """;
-        String userPrompt = "选题：" + selectTopic + "，正文控制1400‑1800字符，结尾必须带互动提问。";
-        JSONObject respJson = callDeepSeekApi(sysPromptTopic, userPrompt);
+        String userPrompt = "选题：" + selectTopic + "，正文控制1400-1800字符，结尾必须带互动提问。";
+        JSONObject respJson = callDeepSeekApi(sysPromptArticle, userPrompt);
         String rawResp = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
         return JSONObject.parseObject(rawResp);
     }
@@ -191,14 +185,14 @@ public class HistoryArticleMain {
         for (int i = 0; i < retryTimes; i++) {
             try {
                 JSONObject reqBody = new JSONObject();
-                reqBody.put("model", "deepseek‑v4‑flash");
+                reqBody.put("model", "deepseek-v4-flash");
                 reqBody.put("max_tokens", MAX_OUTPUT_TOKENS);
                 JSONArray messages = new JSONArray();
                 messages.add(JSONObject.of("role", "system", "content", systemContent));
                 messages.add(JSONObject.of("role", "user", "content", userContent));
                 reqBody.put("messages", messages);
 
-                RequestBody body = RequestBody.create(reqBody.toString(), MediaType.parse("application/json; charset=utf‑8"));
+                RequestBody body = RequestBody.create(reqBody.toString(), MediaType.parse("application/json; charset=utf-8"));
                 Request request = new Request.Builder()
                         .url(DEEPSEEK_URL)
                         .header("Authorization", "Bearer " + DEEPSEEK_API_KEY)
@@ -246,7 +240,7 @@ public class HistoryArticleMain {
         cardBody.put("elements", elements);
         card.put("card", cardBody);
 
-        RequestBody body = RequestBody.create(card.toString(), MediaType.parse("application/json;charset=utf‑8"));
+        RequestBody body = RequestBody.create(card.toString(), MediaType.parse("application/json;charset=utf-8"));
         Request req = new Request.Builder().url(FEISHU_WEBHOOK).post(body).build();
         try (Response resp = HTTP_CLIENT.newCall(req).execute()) {
             if (!resp.isSuccessful()) System.err.println("飞书调用异常 code:" + resp.code());
