@@ -152,6 +152,7 @@ public class HistoryArticleMain {
     }
 
     private static String cleanJsonRaw(String raw) {
+        if(isBlank(raw)) return "";
         String s = raw.trim();
         s = s.replaceAll("^```json", "");
         s = s.replaceAll("^```", "");
@@ -172,7 +173,9 @@ public class HistoryArticleMain {
         String userPrompt = "生成1条全新历史思辨选题，严格避开下面已经使用过的选题，不要重复：\n" + JSON.toJSONString(historyTopics);
         JSONObject respJson = callDeepSeekApi(sysPromptTopic, userPrompt);
         String raw = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
+        if(isBlank(raw)) throw new RuntimeException("选题返回内容为空");
         JSONObject obj = JSONObject.parseObject(raw);
+        if(obj == null) throw new RuntimeException("选题JSON解析返回null");
         return obj.getString("topic").trim();
     }
 
@@ -228,7 +231,14 @@ public class HistoryArticleMain {
                 "\n硬性约束：正文1400‑1800字符，结尾带互动提问，tags字段必须返回非空数组，title、content、tags三个字段缺一不可。";
         JSONObject respJson = callDeepSeekApi(sysPromptArticle, userPrompt);
         String rawResp = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
-        return JSONObject.parseObject(rawResp);
+        if(isBlank(rawResp)){
+            throw new RuntimeException("AI返回内容为空字符串");
+        }
+        JSONObject articleJson = JSONObject.parseObject(rawResp);
+        if(articleJson == null){
+            throw new RuntimeException("fastjson2解析返回null，原始文本："+rawResp);
+        }
+        return articleJson;
     }
 
     private static JSONObject callDeepSeekApi(String systemContent, String userContent) throws IOException {
