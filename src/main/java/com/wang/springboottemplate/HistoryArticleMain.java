@@ -17,15 +17,14 @@ public class HistoryArticleMain {
     private static final String GIST_ID = System.getenv("GIST_ID");
     private static final String GH_PAT = System.getenv("GH_PAT");
     private static final String DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
-    private static final int MAX_OUTPUT_TOKENS = 2600;
+    private static final int MAX_OUTPUT_TOKENS = 3200;
     private static final int MAX_HISTORY_TOPIC_SIZE = 200;
     private static final String GIST_FILENAME = "history_topics.json";
     private static final String OUTPUT_DIR = "output";
     private static final int TARGET_CONTENT_MIN = 1400;
     private static final int TARGET_CONTENT_MAX = 1800;
     /** 文章生成最大重试次数：JSON解析失败 / tags缺失 / 长度不达标都会重试 */
-    private static final int ARTICLE_GENERATE_MAX_RETRY = 3;
-
+    private static final int ARTICLE_GENERATE_MAX_RETRY = 4;
     private static final OkHttpClient HTTP_CLIENT = new OkHttpClient.Builder()
             .connectTimeout(25, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
@@ -42,17 +41,14 @@ public class HistoryArticleMain {
             System.out.printf("历史选题加载，共%d条%n", usedTopics.size());
             String selectTopic = generateTopic(usedTopics);
             System.out.println("生成选题：" + selectTopic);
-
             // 带重试生成文章
             JSONObject articleJson = generateArticleWithRetry(selectTopic);
             String title = articleJson.getString("title");
             String content = articleJson.getString("content");
             JSONArray tags = safeGetJSONArray(articleJson, "tags");
-
             int contentLen = content != null ? content.length() : 0;
             System.out.println("爆款标题：" + title);
             System.out.println("正文长度：" + contentLen);
-
             saveMarkdownFile(title, content, tags);
             appendTopicToGist(usedTopics, selectTopic);
             try {
@@ -66,6 +62,8 @@ public class HistoryArticleMain {
         } catch (Exception e) {
             System.err.println("❌任务失败：" + e.getMessage());
             e.printStackTrace();
+            // 发送飞书失败告警
+            sendFeishuAlert("⚠️历史每日稿件任务执行失败！" + e.getMessage());
             System.exit(1);
         }
     }
@@ -152,7 +150,7 @@ public class HistoryArticleMain {
     }
 
     private static String cleanJsonRaw(String raw) {
-        if(isBlank(raw)) return "";
+        if (isBlank(raw)) return "";
         String s = raw.trim();
         s = s.replaceAll("^```json", "");
         s = s.replaceAll("^```", "");
@@ -173,44 +171,43 @@ public class HistoryArticleMain {
         String userPrompt = "生成1条全新历史思辨选题，严格避开下面已经使用过的选题，不要重复：\n" + JSON.toJSONString(historyTopics);
         JSONObject respJson = callDeepSeekApi(sysPromptTopic, userPrompt);
         String raw = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
-        if(isBlank(raw)) throw new RuntimeException("选题返回内容为空");
+        if (isBlank(raw)) throw new RuntimeException("选题返回内容为空");
         JSONObject obj = JSONObject.parseObject(raw);
-        if(obj == null) throw new RuntimeException("选题JSON解析返回null");
+        if (obj == null) throw new RuntimeException("选题JSON解析返回null");
         return obj.getString("topic").trim();
     }
 
     /**
-     * 带重试生成文章：JSON解析异常 / tags为空 / 长度不达标 自动重试
+     * 带重试生成文章：JSON解析失败 / tags缺失 / 长度不达标 自动重试
      */
     private static JSONObject generateArticleWithRetry(String selectTopic) throws IOException {
         Exception lastErr = null;
         for (int i = 0; i < ARTICLE_GENERATE_MAX_RETRY; i++) {
             try {
-                System.out.printf("📝开始生成文章，第%d/%d次尝试%n", i+1, ARTICLE_GENERATE_MAX_RETRY);
+                System.out.printf("📝开始生成文章，第%d/%d次尝试%n", i + 1, ARTICLE_GENERATE_MAX_RETRY);
                 JSONObject articleJson = generateArticleOnce(selectTopic);
                 String title = articleJson.getString("title");
                 String content = articleJson.getString("content");
                 JSONArray tags = safeGetJSONArray(articleJson, "tags");
-
-                if(isBlank(title) || isBlank(content)){
+                if (isBlank(title) || isBlank(content)) {
                     throw new RuntimeException("title或content为空");
                 }
-                if(tags.isEmpty()){
+                if (tags.isEmpty()) {
                     throw new RuntimeException("tags数组为空");
                 }
                 int len = content.length();
-                if(len < TARGET_CONTENT_MIN || len > TARGET_CONTENT_MAX){
-                    throw new RuntimeException("正文长度不达标，实际="+len);
+                if (len < TARGET_CONTENT_MIN || len > TARGET_CONTENT_MAX) {
+                    throw new RuntimeException("正文长度不达标，实际=" + len);
                 }
                 //全部校验通过返回
                 return articleJson;
-            }catch (Exception e){
+            } catch (Exception e) {
                 lastErr = e;
-                System.err.printf("⚠️文章生成校验失败：%s，准备重试%n",e.getMessage());
+                System.err.printf("⚠️文章生成校验失败：%s，准备重试%n", e.getMessage());
                 sleepMs(2500);
             }
         }
-        throw new IOException("多次生成文章全部失败",lastErr);
+        throw new IOException("多次生成文章全部失败", lastErr);
     }
 
     private static JSONObject generateArticleOnce(String selectTopic) throws IOException {
@@ -222,7 +219,7 @@ public class HistoryArticleMain {
                 3.史实：严格引用正史，禁止阴谋论、野史脑洞；观点客观中立，不强行站队。
                 4.标题：要有冲突感、悬念感，适合自媒体传播。
                 5.tags必须输出4个标签，以#开头，数组形式，不能为空。
-                6.字符严格控制1400‑1800，结尾必须留下开放式提问，引导读者评论。
+                6.字符严格控制1400‑1800，严禁输出少于1400字符，如果内容不够，必须扩充细节、补充人物心理推演、丰富时代背景，直到达到字符下限，不要简写压缩。结尾必须留下开放式提问，引导读者评论。
                 7.只返回JSON，禁止任何多余说明、禁止markdown代码块包裹输出。
                 返回JSON模板：
                 {"title":"","content":"换行使用\\n","tags":["#历史","#古代史","#历史解读","#人物"]}
@@ -231,18 +228,18 @@ public class HistoryArticleMain {
                 "\n硬性约束：正文1400‑1800字符，结尾带互动提问，tags字段必须返回非空数组，title、content、tags三个字段缺一不可。";
         JSONObject respJson = callDeepSeekApi(sysPromptArticle, userPrompt);
         String rawResp = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
-        if(isBlank(rawResp)){
+        if (isBlank(rawResp)) {
             throw new RuntimeException("AI返回内容为空字符串");
         }
         JSONObject articleJson = JSONObject.parseObject(rawResp);
-        if(articleJson == null){
-            throw new RuntimeException("fastjson2解析返回null，原始文本："+rawResp);
+        if (articleJson == null) {
+            throw new RuntimeException("fastjson2解析返回null，原始文本：" + rawResp);
         }
         return articleJson;
     }
 
     private static JSONObject callDeepSeekApi(String systemContent, String userContent) throws IOException {
-        int retryTimes = 2;
+        int retryTimes = 3;
         Exception lastEx = null;
         for (int i = 0; i < retryTimes; i++) {
             try {
@@ -264,7 +261,19 @@ public class HistoryArticleMain {
                     if (!response.isSuccessful()) {
                         throw new IOException("DeepSeek http code:" + response.code() + " body:" + respBody);
                     }
-                    return JSONObject.parseObject(respBody);
+                    JSONObject respJson = JSONObject.parseObject(respBody);
+                    JSONArray choices = respJson.getJSONArray("choices");
+                    if (choices == null || choices.isEmpty()) {
+                        throw new RuntimeException("DeepSeek返回choices数组为空");
+                    }
+                    JSONObject choice0 = choices.getJSONObject(0);
+                    JSONObject message = choice0.getJSONObject("message");
+                    String aiContent = message.getString("content");
+                    System.out.printf("[DEBUG] DeepSeek返回原始content长度:%d%n", aiContent != null ? aiContent.length() : 0);
+                    if (isBlank(aiContent)) {
+                        throw new RuntimeException("DeepSeek返回content是空字符串");
+                    }
+                    return respJson;
                 }
             } catch (Exception e) {
                 lastEx = e;
@@ -307,6 +316,21 @@ public class HistoryArticleMain {
                 String respBody = resp.body() != null ? resp.body().string() : "";
                 System.err.println("feishu response body:" + respBody);
             }
+        }
+    }
+
+    /**
+     * 飞书告警消息，任务失败时调用
+     */
+    private static void sendFeishuAlert(String text) {
+        try {
+            JSONObject alertBody = new JSONObject();
+            alertBody.put("msg_type", "text");
+            alertBody.put("content", JSONObject.of("text", text));
+            RequestBody body = RequestBody.create(alertBody.toString(), MediaType.parse("application/json;charset=utf-8"));
+            Request req = new Request.Builder().url(FEISHU_WEBHOOK).post(body).build();
+            HTTP_CLIENT.newCall(req).execute().close();
+        } catch (Exception ignored) {
         }
     }
 
