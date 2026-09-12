@@ -17,7 +17,7 @@ public class HistoryArticleMain {
     private static final String GIST_ID = System.getenv("GIST_ID");
     private static final String GH_PAT = System.getenv("GH_PAT");
     private static final String DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
-    private static final int MAX_OUTPUT_TOKENS = 3200;
+    private static final int MAX_OUTPUT_TOKENS = 4096;
     private static final int MAX_HISTORY_TOPIC_SIZE = 200;
     private static final String GIST_FILENAME = "history_topics.json";
     private static final String OUTPUT_DIR = "output";
