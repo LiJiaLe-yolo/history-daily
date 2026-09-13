@@ -22,18 +22,16 @@ public class HistoryArticleMain {
     private static final String GIST_FILENAME = "history_topics.json";
     private static final String OUTPUT_DIR = "output";
 
-    // [优化] 放宽校验区间，给AI更多容错空间，代码层做兜底截断
+    // 统一校验区间，与Prompt保持一致
     private static final int TARGET_CONTENT_MIN = 1300;
     private static final int TARGET_CONTENT_MAX = 2000;
-    // [优化] 截断目标长度，超长时截断到此长度
     private static final int TRUNCATE_TARGET = 1850;
 
     private static final int ARTICLE_GENERATE_MAX_RETRY = 4;
 
-    // [优化] 提升超时时间，减少 Connection reset
     private static final OkHttpClient HTTP_CLIENT = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)   // 120s → 180s
+            .readTimeout(180, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build();
@@ -158,13 +156,12 @@ public class HistoryArticleMain {
     private static String cleanJsonRaw(String raw) {
         if (isBlank(raw)) return "";
         String s = raw.trim();
-        s = s.replaceAll("^```json", "");
-        s = s.replaceAll("^```", "");
-        s = s.replaceAll("``` $ ", "");
+        s = s.replaceAll("^```json\\s*", "");
+        s = s.replaceAll("^```\\s*", "");
+        s = s.replaceAll("\\s*```\\s* $ ", "");
         return s.trim();
     }
 
-    // [优化] 新增：修复 JSON 中未转义的特殊字符，防止 fastjson2 解析报错
     private static String fixJsonEscapes(String json) {
         if (json == null) return "";
         StringBuilder sb = new StringBuilder(json.length());
@@ -188,7 +185,6 @@ public class HistoryArticleMain {
                 sb.append(c);
                 continue;
             }
-            // 在 JSON 字符串值内部，修复未转义的控制字符
             if (inString) {
                 switch (c) {
                     case '\n' -> sb.append("\\n");
@@ -211,10 +207,74 @@ public class HistoryArticleMain {
         return sb.toString();
     }
 
-    // [优化] 新增：安全截断文本，在句号/换行处断开，避免切断句子
+    /**
+     * 检测JSON是否结构完整（以{开头、}结尾，且引号成对）
+     */
+    private static boolean isCompleteJson(String json) {
+        if (isBlank(json)) return false;
+        String trimmed = json.trim();
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false;
+        int quoteCount = 0;
+        for (int i = 0; i < trimmed.length(); i++) {
+            if (trimmed.charAt(i) == '"' && (i == 0 || trimmed.charAt(i - 1) != '\\')) {
+                quoteCount++;
+            }
+        }
+        return quoteCount % 2 == 0;
+    }
+
+    /**
+     * 尝试修复被token截断的JSON（仅适用于content字段被截断的情况）
+     * 找到最后一个完整句子，截断并补全JSON结构
+     */
+    private static String tryRepairTruncatedJson(String json) {
+        try {
+            int contentIdx = json.indexOf("\"content\":\"");
+            if (contentIdx < 0) return null;
+
+            int valueStart = contentIdx + "\"content\":\"".length();
+            String truncatedContent = json.substring(valueStart);
+
+            // 从末尾往前找最后一个有效断句点
+            int lastValidEnd = -1;
+            for (int i = truncatedContent.length() - 1; i >= 0; i--) {
+                char c = truncatedContent.charAt(i);
+                if (c == '。' || c == '？' || c == '！' || c == '\n') {
+                    lastValidEnd = i;
+                    break;
+                }
+            }
+
+            if (lastValidEnd < 100) return null; // 有效内容太少，放弃修复
+
+            String validContent = truncatedContent.substring(0, lastValidEnd + 1);
+            // 提取title（可能也被截断，做容错处理）
+            String title = extractPartialTitle(json);
+
+            // 重新构建合法JSON
+            JSONObject repaired = new JSONObject();
+            repaired.put("title", title);
+            repaired.put("content", validContent);
+            repaired.put("tags", new JSONArray().fluentAdd("#历史").fluentAdd("#历史解读"));
+            return repaired.toJSONString();
+        } catch (Exception e) {
+            System.err.println("⚠️JSON修复失败：" + e.getMessage());
+            return null;
+        }
+    }
+
+    private static String extractPartialTitle(String json) {
+        try {
+            int start = json.indexOf("\"title\":\"") + "\"title\":\"".length();
+            int end = json.indexOf("\"", start);
+            if (start > 0 && end > start) return json.substring(start, end);
+        } catch (Exception ignored) {
+        }
+        return "历史文章";
+    }
+
     private static String truncateSafely(String text, int maxLen) {
         if (text == null || text.length() <= maxLen) return text;
-        // 从 maxLen 位置往前找最近的自然断句点
         String truncated = text.substring(0, maxLen);
         int lastNewline = truncated.lastIndexOf("\n\n");
         if (lastNewline > maxLen * 0.6) {
@@ -253,15 +313,9 @@ public class HistoryArticleMain {
 
     // ======================== 文章生成（带智能重试） ========================
 
-    /**
-     * [优化] 带重试生成文章：
-     * 1. 放宽校验区间 1300-2000
-     * 2. 超长自动截断兜底
-     * 3. 把上一次失败原因反馈给下一次尝试
-     */
     private static JSONObject generateArticleWithRetry(String selectTopic) throws IOException {
         Exception lastErr = null;
-        String feedback = ""; // [优化] 重试反馈信息
+        String feedback = "";
 
         for (int i = 0; i < ARTICLE_GENERATE_MAX_RETRY; i++) {
             try {
@@ -281,15 +335,12 @@ public class HistoryArticleMain {
 
                 int len = content.length();
 
-                // [优化] 下限校验
                 if (len < TARGET_CONTENT_MIN) {
                     throw new RuntimeException("正文长度不足，实际=" + len + "，需>=" + TARGET_CONTENT_MIN);
                 }
 
-                // [优化] 超长自动截断兜底，不再直接报错
                 if (len > TARGET_CONTENT_MAX) {
                     content = truncateSafely(content, TRUNCATE_TARGET);
-                    // 确保截断后仍包含互动提问结尾
                     if (!content.contains("？") && !content.contains("?")) {
                         content += "\n\n你怎么看？欢迎评论区聊聊。";
                     }
@@ -301,20 +352,26 @@ public class HistoryArticleMain {
                 return articleJson;
             } catch (Exception e) {
                 lastErr = e;
-                // [优化] 构建反馈信息，让下一次尝试有针对性修正
-                feedback = "【上一次生成失败，请务必修正】" + e.getMessage()
-                        + "。请特别注意正文长度控制在1400-1800字符之间。";
-                System.err.printf("⚠️文章生成校验失败：%s，准备重试%n", e.getMessage());
+                String msg = e.getMessage();
+
+                // [关键优化] 区分截断和过短，给出不同反馈
+                if (msg != null && (msg.contains("截断") || msg.contains("EOI") || msg.contains("不完整"))) {
+                    feedback = "【上一次输出被系统截断】请务必将正文压缩到1300-1500字符以内，确保JSON完整闭合。禁止输出任何思考过程或额外说明，直接输出最终JSON。";
+                } else if (msg != null && msg.contains("长度不足")) {
+                    feedback = "【上一次正文过短】请扩充至1400-1600字符，增加人物心理博弈、横向对比或史家争议观点来充实内容。";
+                } else {
+                    feedback = "【上一次生成失败】" + msg + "。请确保正文1300-1600字符，JSON格式合法完整。";
+                }
+
+                System.err.printf("⚠️文章生成校验失败：%s，准备重试%n", msg);
                 sleepMs(2500);
             }
         }
         throw new IOException("多次生成文章全部失败", lastErr);
     }
 
-    /**
-     * [优化] 新增 feedback 参数，重试时将失败原因传入 Prompt
-     */
     private static JSONObject generateArticleOnce(String selectTopic, String feedback) throws IOException {
+        // [关键优化] 统一字数约束为1300-1600，消除矛盾指令
         String sysPromptArticle = """
                 你是成熟的今日头条历史自媒体撰稿人，面向普通大众，追求高完读率、高评论互动。
                 硬性写作规范：
@@ -323,19 +380,18 @@ public class HistoryArticleMain {
                 3.史实：严格引用正史，禁止阴谋论、野史脑洞；观点客观中立，不强行站队。
                 4.标题：要有冲突感、悬念感，适合自媒体传播。
                 5.tags必须输出4个标签，以#开头，数组形式，不能为空。
-                6.【篇幅铁律】正文目标1500-1700字，这是最重要的约束：
-                   - 内容单薄时，必须增加：人物心理博弈细节、同时期横向对比、后世史家争议观点来扩充。
+                6.【篇幅铁律】正文目标1300-1600字，这是最重要的约束：
+                   - 内容单薄时，增加人物心理博弈细节、同时期横向对比、后世史家争议观点来扩充。
                    - 不要为凑字数重复废话，每段要有新信息量。
                    - 结尾互动提问是正文的一部分，计入字数。
-                7.只返回JSON，禁止任何多余说明、禁止markdown代码块包裹输出。
-                8.返回的JSON必须合法：字符串中的换行用\\n表示，禁止出现真实换行符；双引号用\\"转义。
+                7.只返回纯JSON，禁止任何多余说明、禁止markdown代码块包裹、禁止输出思考过程。
+                8.返回的JSON必须合法且完整闭合：字符串中的换行用\\n表示，双引号用\\"转义。
                 返回JSON模板：
                 {"title":"","content":"换行使用\\n","tags":["#历史","#古代史","#历史解读","#人物"]}
                 """;
 
-        // [优化] userPrompt 加入重试反馈信息
         String userPrompt = "请根据下面选题写一篇自媒体文章：" + selectTopic
-                + "\n硬性约束：正文1400-1800字符，结尾带互动提问，tags字段必须返回非空数组，title、content、tags三个字段缺一不可。"
+                + "\n硬性约束：正文1300-1600字符，结尾带互动提问，tags字段必须返回非空数组，title、content、tags三个字段缺一不可。"
                 + (isBlank(feedback) ? "" : "\n\n" + feedback);
 
         JSONObject respJson = callDeepSeekApi(sysPromptArticle, userPrompt);
@@ -344,12 +400,28 @@ public class HistoryArticleMain {
             throw new RuntimeException("AI返回内容为空字符串");
         }
 
-        // [优化] 修复 JSON 转义问题后再解析
         rawResp = fixJsonEscapes(rawResp);
+
+        // [关键优化] 解析前检测JSON完整性，截断时尝试修复
+        if (!isCompleteJson(rawResp)) {
+            String finishReason = respJson.getJSONArray("choices").getJSONObject(0).getString("finish_reason");
+            if ("length".equals(finishReason)) {
+                System.err.println("⚠️JSON被token截断，尝试自动修复...");
+                String repaired = tryRepairTruncatedJson(rawResp);
+                if (repaired != null) {
+                    System.out.println("✅JSON修复成功，使用补全后的内容");
+                    rawResp = repaired;
+                } else {
+                    throw new RuntimeException("AI输出被token限制截断且无法自动修复，请重试");
+                }
+            } else {
+                throw new RuntimeException("JSON格式不完整且非length截断，原始文本前200字符：" + rawResp.substring(0, Math.min(200, rawResp.length())));
+            }
+        }
 
         JSONObject articleJson = JSONObject.parseObject(rawResp);
         if (articleJson == null) {
-            throw new RuntimeException("fastjson2解析返回null，原始文本：" + rawResp);
+            throw new RuntimeException("fastjson2解析返回null，原始文本前200字符：" + rawResp.substring(0, Math.min(200, rawResp.length())));
         }
         return articleJson;
     }
@@ -386,10 +458,9 @@ public class HistoryArticleMain {
                     }
                     JSONObject choice0 = choices.getJSONObject(0);
 
-                    // [优化] 检查 finish_reason，如果是 length 说明被截断了
                     String finishReason = choice0.getString("finish_reason");
                     if ("length".equals(finishReason)) {
-                        System.err.println("⚠️DeepSeek输出被max_tokens截断(finish_reason=length)，建议增大MAX_OUTPUT_TOKENS");
+                        System.err.println("⚠️DeepSeek输出被max_tokens截断(finish_reason=length)");
                     }
 
                     JSONObject message = choice0.getJSONObject("message");
@@ -403,7 +474,6 @@ public class HistoryArticleMain {
                 }
             } catch (Exception e) {
                 lastEx = e;
-                // [优化] 指数退避重试：2s → 4s → 8s
                 long waitMs = 2000L * (1L << i);
                 System.err.printf("DeepSeek调用失败，重试 %d/%d :%s，等待%ds%n", i + 1, retryTimes, e.getMessage(), waitMs / 1000);
                 sleepMs(waitMs);
