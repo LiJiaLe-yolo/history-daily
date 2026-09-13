@@ -1,7 +1,7 @@
 name: 仓库保活
 on:
   schedule:
-    - cron: '0 0 15 * *'  #每月15号执行一次
+    - cron: '0 0 */15 * *'  # 每15天执行一次
   workflow_dispatch:
 
 jobs:
