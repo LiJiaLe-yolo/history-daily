@@ -19,7 +19,7 @@ public class HistoryArticleMain {
     private static final String DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 
     // ⚠️ 请确认此模型ID在DeepSeek官方文档中有效，若持续报错建议改为 "deepseek-chat" 或 "deepseek-v3"
-    private static final String MODEL_NAME = "deepseek-v4-flash";
+    private static final String MODEL_NAME = "deepseek-flash";
     private static final int MAX_OUTPUT_TOKENS = 4096;
     private static final int MAX_HISTORY_TOPIC_SIZE = 200;
     private static final String GIST_FILENAME = "history_topics.json";
