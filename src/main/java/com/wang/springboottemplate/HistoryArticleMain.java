@@ -17,6 +17,9 @@ public class HistoryArticleMain {
     private static final String GIST_ID = System.getenv("GIST_ID");
     private static final String GH_PAT = System.getenv("GH_PAT");
     private static final String DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
+
+    // ⚠️ 请确认此模型ID在DeepSeek官方文档中有效，若持续报错建议改为 "deepseek-chat" 或 "deepseek-v3"
+    private static final String MODEL_NAME = "deepseek-v4-flash";
     private static final int MAX_OUTPUT_TOKENS = 4096;
     private static final int MAX_HISTORY_TOPIC_SIZE = 200;
     private static final String GIST_FILENAME = "history_topics.json";
@@ -225,7 +228,6 @@ public class HistoryArticleMain {
 
     /**
      * 尝试修复被token截断的JSON（仅适用于content字段被截断的情况）
-     * 找到最后一个完整句子，截断并补全JSON结构
      */
     private static String tryRepairTruncatedJson(String json) {
         try {
@@ -248,10 +250,8 @@ public class HistoryArticleMain {
             if (lastValidEnd < 100) return null; // 有效内容太少，放弃修复
 
             String validContent = truncatedContent.substring(0, lastValidEnd + 1);
-            // 提取title（可能也被截断，做容错处理）
             String title = extractPartialTitle(json);
 
-            // 重新构建合法JSON
             JSONObject repaired = new JSONObject();
             repaired.put("title", title);
             repaired.put("content", validContent);
@@ -306,6 +306,13 @@ public class HistoryArticleMain {
         JSONObject respJson = callDeepSeekApi(sysPromptTopic, userPrompt);
         String raw = cleanJsonRaw(respJson.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"));
         if (isBlank(raw)) throw new RuntimeException("选题返回内容为空");
+
+        // 🔑 新增：选题返回非JSON格式的防护
+        if (!raw.startsWith("{")) {
+            System.err.println("⚠️ 选题返回非JSON格式: " + raw.substring(0, Math.min(200, raw.length())));
+            throw new RuntimeException("选题生成失败：AI未返回合法JSON");
+        }
+
         JSONObject obj = JSONObject.parseObject(raw);
         if (obj == null) throw new RuntimeException("选题JSON解析返回null");
         return obj.getString("topic").trim();
@@ -354,7 +361,7 @@ public class HistoryArticleMain {
                 lastErr = e;
                 String msg = e.getMessage();
 
-                // [关键优化] 区分截断和过短，给出不同反馈
+                // 区分截断和过短，给出不同反馈
                 if (msg != null && (msg.contains("截断") || msg.contains("EOI") || msg.contains("不完整"))) {
                     feedback = "【上一次输出被系统截断】请务必将正文压缩到1300-1500字符以内，确保JSON完整闭合。禁止输出任何思考过程或额外说明，直接输出最终JSON。";
                 } else if (msg != null && msg.contains("长度不足")) {
@@ -371,7 +378,6 @@ public class HistoryArticleMain {
     }
 
     private static JSONObject generateArticleOnce(String selectTopic, String feedback) throws IOException {
-        // [关键优化] 统一字数约束为1300-1600，消除矛盾指令
         String sysPromptArticle = """
                 你是成熟的今日头条历史自媒体撰稿人，面向普通大众，追求高完读率、高评论互动。
                 硬性写作规范：
@@ -402,7 +408,7 @@ public class HistoryArticleMain {
 
         rawResp = fixJsonEscapes(rawResp);
 
-        // [关键优化] 解析前检测JSON完整性，截断时尝试修复
+        // 解析前检测JSON完整性，截断时尝试修复
         if (!isCompleteJson(rawResp)) {
             String finishReason = respJson.getJSONArray("choices").getJSONObject(0).getString("finish_reason");
             if ("length".equals(finishReason)) {
@@ -434,7 +440,7 @@ public class HistoryArticleMain {
         for (int i = 0; i < retryTimes; i++) {
             try {
                 JSONObject reqBody = new JSONObject();
-                reqBody.put("model", "deepseek-v4-flash");
+                reqBody.put("model", MODEL_NAME);
                 reqBody.put("max_tokens", MAX_OUTPUT_TOKENS);
                 JSONArray messages = new JSONArray();
                 messages.add(JSONObject.of("role", "system", "content", systemContent));
@@ -452,21 +458,36 @@ public class HistoryArticleMain {
                         throw new IOException("DeepSeek http code:" + response.code() + " body:" + respBody);
                     }
                     JSONObject respJson = JSONObject.parseObject(respBody);
+
+                    // 🔑 新增：检查API级别错误
+                    if (respJson.containsKey("error")) {
+                        throw new IOException("DeepSeek API Error: " + respJson.getJSONObject("error").toString());
+                    }
+
                     JSONArray choices = respJson.getJSONArray("choices");
                     if (choices == null || choices.isEmpty()) {
-                        throw new RuntimeException("DeepSeek返回choices数组为空");
+                        // 🔑 新增：打印完整响应体辅助调试
+                        System.err.println("⚠️ choices为空，原始响应体: " + respBody);
+                        throw new IOException("DeepSeek返回choices数组为空");
                     }
                     JSONObject choice0 = choices.getJSONObject(0);
 
                     String finishReason = choice0.getString("finish_reason");
+                    JSONObject message = choice0.getJSONObject("message");
+                    String aiContent = message.getString("content");
+
+                    System.out.printf("[DEBUG] DeepSeek返回原始content长度:%d, finish_reason:%s%n",
+                            aiContent != null ? aiContent.length() : 0, finishReason);
+
+                    // 🔑 核心修复：空内容 + length截断 = 服务端瞬时故障，应作为IO异常重试
+                    if (isBlank(aiContent) && "length".equals(finishReason)) {
+                        throw new IOException("DeepSeek返回空内容且finish_reason=length（服务端瞬时故障）");
+                    }
+
                     if ("length".equals(finishReason)) {
                         System.err.println("⚠️DeepSeek输出被max_tokens截断(finish_reason=length)");
                     }
 
-                    JSONObject message = choice0.getJSONObject("message");
-                    String aiContent = message.getString("content");
-                    System.out.printf("[DEBUG] DeepSeek返回原始content长度:%d, finish_reason:%s%n",
-                            aiContent != null ? aiContent.length() : 0, finishReason);
                     if (isBlank(aiContent)) {
                         throw new RuntimeException("DeepSeek返回content是空字符串");
                     }
@@ -540,10 +561,15 @@ public class HistoryArticleMain {
         return s == null || s.isBlank();
     }
 
+    /**
+     * 🔑 优化：加入±20%随机抖动，避免重试请求集中冲击服务端
+     */
     private static void sleepMs(long ms) {
         try {
-            TimeUnit.MILLISECONDS.sleep(ms);
-        } catch (InterruptedException ignored) {
+            long jitter = (long) (ms * 0.2 * (Math.random() * 2 - 1));
+            TimeUnit.MILLISECONDS.sleep(ms + jitter);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 }
