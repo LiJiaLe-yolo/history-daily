@@ -1,0 +1,26 @@
+name: Codespaces保活任务
+on:
+  workflow_dispatch:
+  schedule:
+    # UTC时间每15天执行一次，错开仓库保活的cron时间
+    - cron: '0 16 */15 * *'
+
+jobs:
+  keepalive-codespace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 安装 GitHub CLI
+        run: sudo apt-get install gh -y
+
+      - name: 唤醒Codespace重置保留倒计时
+        env:
+          GH_TOKEN: ${{ secrets.GH_CODESPACE_PAT }}
+          # ========== 这里每个仓库必须修改 ==========
+          CODESPACE_NAME: "silver parakeet"
+          REPO_FULL_NAME: "LiJiaLe-yolo/history-daily"
+          # ========================================
+        run: |
+          gh codespace start --codespace "$CODESPACE_NAME" --repo "$REPO_FULL_NAME"
+          sleep 20
+          gh codespace stop --codespace "$CODESPACE_NAME"
